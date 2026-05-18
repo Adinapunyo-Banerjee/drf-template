@@ -10,7 +10,8 @@ from rest_framework import status
 
 
 CREATE_USER_URL = reverse('user:create')
-TOKEN_URL = reverse('user:token')
+TOKEN_URL = reverse('user:token_obtain_pair')
+REFRESH_URL = reverse('user:token_refresh')
 ME_URL = reverse('user:me')
 
 
@@ -81,8 +82,40 @@ class PublicUserApiTests(TestCase):
         }
         res = self.client.post(TOKEN_URL, payload)
 
-        self.assertIn('token', res.data)
+        self.assertIn('refresh', res.data)
+        self.assertIn('access', res.data)
         self.assertEqual(res.status_code, status.HTTP_200_OK)
+
+    def test_refresh_token_success(self):
+        """Test that a refresh token is created."""
+        user_details = {
+            'name': 'Test Name',
+            'email': 'test@example.com',
+            'password': 'test-pass123'
+        }
+        create_user(**user_details)
+
+        payload = {
+            'email': user_details['email'],
+            'password': user_details['password']
+        }
+        res = self.client.post(TOKEN_URL, payload)
+
+        refresh = res.data['refresh']
+        payload = {'refresh': refresh}
+
+        res = self.client.post(REFRESH_URL, payload)
+        self.assertIn('access', res.data)
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+
+    def test_refresh_invalid_token(self):
+        """Test refresh fails with invalid token."""
+        payload = {
+            'refresh': 'invalidtoken'
+        }
+        res = self.client.post(REFRESH_URL, payload)
+
+        self.assertEqual(res.status_code, status.HTTP_401_UNAUTHORIZED)
 
     def test_create_token_bad_credentials(self):
         """Test returns error if credentials invalid"""
@@ -91,8 +124,9 @@ class PublicUserApiTests(TestCase):
         payload = {'email': 'test@example.com', 'password': 'badpass'}
         res = self.client.post(TOKEN_URL, payload)
 
-        self.assertNotIn('token', res.data)
-        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertNotIn('refresh', res.data)
+        self.assertNotIn('access', res.data)
+        self.assertEqual(res.status_code, status.HTTP_401_UNAUTHORIZED)
 
     def test_create_token_blank_password(self):
         """Test returns error if password is blank"""
@@ -101,7 +135,8 @@ class PublicUserApiTests(TestCase):
         payload = {'email': 'test@example.com', 'password': ''}
         res = self.client.post(TOKEN_URL, payload)
 
-        self.assertNotIn('token', res.data)
+        self.assertNotIn('refresh', res.data)
+        self.assertNotIn('access', res.data)
         self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
 
     def test_retrieve_user_unauthorized(self):
@@ -122,7 +157,7 @@ class PrivateUserApiTests(TestCase):
         )
         self.client = APIClient()
         # This is the token that will be used to authenticate the user in the tests below
-        # We are not using our own authentication scheme to isoltae the tests, so we need to force authentication
+        # We are not using our own authentication scheme to isolate the tests, so we need to force authentication
         self.client.force_authenticate(user=self.user)
 
     def test_retrieve_profile_success(self):
@@ -149,4 +184,20 @@ class PrivateUserApiTests(TestCase):
         self.user.refresh_from_db()  # Refresh the user object to reflect changes made by PATCH request
         self.assertEqual(self.user.name, payload['name'])
         self.assertTrue(self.user.check_password(payload['password']))
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+
+    def test_authenticate_with_jwt(self):
+        """Test authenticating with a real JWT token."""
+        payload = {
+            'email': 'test@example.com',
+            'password': 'goodpass',
+        }
+        res = self.client.post(TOKEN_URL, payload)
+
+        access_token = res.data['access']
+        self.client.credentials(
+            HTTP_AUTHORIZATION=f'Bearer {access_token}'
+        )
+        res = self.client.get(ME_URL)
+
         self.assertEqual(res.status_code, status.HTTP_200_OK)
